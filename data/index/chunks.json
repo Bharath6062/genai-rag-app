@@ -1,0 +1,12 @@
+[
+  {
+    "source": "sample.txt",
+    "chunk_id": 0,
+    "text": "RAG stands for Retrieval-Augmented Generation.\nIt works by finding relevant text from your documents before answering.\nThe system converts text into embeddings (numbers).\nThen it compares your question embedding to document chunk embeddings.\nIt sele"
+  },
+  {
+    "source": "sample.txt",
+    "chunk_id": 1,
+    "text": "cts the top matching chunks and sends them as context to the AI.\nThis reduces hallucinations and keeps answers grounded in your files."
+  }
+]
