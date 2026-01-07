@@ -1,0 +1,47 @@
+[
+  {
+    "doc_id": "resume.txt",
+    "chunk_id": 0,
+    "text": "Bharath Reddy bharath@myjobemails.com | Minnesota, USA | +1 (763) 210-8511 | LinkedIn PROFESSIONAL SUMMARY Data Engineer with 3+ years of experience, have a proven track record in designing, implementing, and maintaining robust data infrastructure and pipelines. Proficient in Python, SQL, and Scala and Machine Learning, Specialize in ETL processes, leveraging tools like Apache Spark and Hadoop for distributed data processing and also proficient in NLP, Deep Learning, and machine learning models for analysis. TECHNICAL SKILLS \uf0b7 Programming & Libraries: Python, R, DAX, SQL, PL-SQL,NumPy, Pandas, Matplotlib, PySpark, Core Java, JavaScript"
+  },
+  {
+    "doc_id": "resume.txt",
+    "chunk_id": 1,
+    "text": "\uf0b7 Programming & Libraries: Python, R, DAX, SQL, PL-SQL,NumPy, Pandas, Matplotlib, PySpark, Core Java, JavaScript \uf0b7 Databases: MySQL, MS SQL Server, PostgreSQL, Snowflake, Oracle \uf0b7 Tools: Tableau, Power BI, SSRS, PowerApps, Tableau Prep, Google Data Flow, Hadoop, HDFS, Spark, Hive, Pig, MapReduce, EMR, Kafka, Sqoop \uf0b7 Data Science & Analytics: Machine Learning, Data Warehousing, Data Mining, Data bricks, Data Analytics, Data Modeling, Data Engineering, Database Querying, Microsoft Office 365, Power Query, DAX Functions, ETL Processing, Data Pipelines, Data Transformation, Ad-Hoc Analytics, Git Repository, JIRA, Data Verse, Data Visualization Docker, Jenkins,"
+  },
+  {
+    "doc_id": "resume.txt",
+    "chunk_id": 2,
+    "text": "Data Pipelines, Data Transformation, Ad-Hoc Analytics, Git Repository, JIRA, Data Verse, Data Visualization Docker, Jenkins, REST API's PROFESSIONAL EXPERIENCE Data Engineer, LTIMintree Aug 2023 \u2013 Present | Remote, USA \uf0b7 Developed a real-time ETL pipeline with Apache Kafka and Spark (Scala) to analyze customer behavior data on an e commerce platform, resulting in a 15% increase in sales conversions. \uf0b7 Utilized Hadoop and MapReduce to optimize large-scale historical data processing, implementing data mapping and transformation logic to ensure consistency and integrity across diverse sources. \uf0b7 Architected and optimized the Snowflake"
+  },
+  {
+    "doc_id": "resume.txt",
+    "chunk_id": 3,
+    "text": "logic to ensure consistency and integrity across diverse sources. \uf0b7 Architected and optimized the Snowflake data warehouse for efficient storage and retrieval of structured and unstructured data, ensuring scalability and performance for large datasets. \uf0b7 Automated comprehensive ETL workflows using Python and SQL for data extraction, transformation, and loading into the warehouse, while leveraging MS Excel for ad-hoc analysis and reporting. \uf0b7 Developed interactive dashboards using Power BI, enabling real-time visualization of key business metrics and empowering data-driven decision-making across departments. \uf0b7 Integrated predictive models using Azure Machine Learning Services"
+  },
+  {
+    "doc_id": "resume.txt",
+    "chunk_id": 4,
+    "text": "and empowering data-driven decision-making across departments. \uf0b7 Integrated predictive models using Azure Machine Learning Services for customer churn prediction and personalized product recommendations, deploying models and data pipelines in the cloud with Azure Data Factory, Azure Blob Storage, and Azure Synapse Analytics for secure, scalable infrastructure. \uf0b7 Automated CI/CD pipelines using Azure DevOps for efficient data infrastructure deployment, while optimizing Spark job performance and implementing monitoring tools for continuous improvement. \uf0b7 Achieved a 10% reduction in customer churn and a 15% increase in sales conversions by leveraging real-time insights and"
+  },
+  {
+    "doc_id": "resume.txt",
+    "chunk_id": 5,
+    "text": "in customer churn and a 15% increase in sales conversions by leveraging real-time insights and predictive analytics, while automating end-to-end data workflows to enhance operational efficiency. Data Engineer, HSBC Bank Mar 2021 \u2013 Dec 2022 | Hyderabad, India \uf0b7 Developed a highly scalable data integration and real-time analytics platform using Python and PySpark, streamlining data processing and improving the organization\u2019s ability to derive actionable insights for better decision-making. \uf0b7 Architected and optimized ETL pipelines with Python, leveraging PySpark on Azure Databricks to enhance data processing by 40% and ensure high"
+  },
+  {
+    "doc_id": "resume.txt",
+    "chunk_id": 6,
+    "text": "Python, leveraging PySpark on Azure Databricks to enhance data processing by 40% and ensure high data quality across 10TB+ of structured, semi-structured, and unstructured data. \uf0b7 Utilized Pandas, NumPy, and SQLAlchemy for efficient data manipulation and transformation within the pipelines, improving data management workflows. \uf0b7 Integrated machine learning models with scikit-learn and TensorFlow into data pipelines, automating forecasting and customer behavior prediction, achieving a 30% increase in accuracy and saving over 100 man-hours per month. \uf0b7 Implemented CI/CD pipelines with Azure DevOps for continuous integration and deployment, reducing deployment time"
+  },
+  {
+    "doc_id": "resume.txt",
+    "chunk_id": 7,
+    "text": "\uf0b7 Implemented CI/CD pipelines with Azure DevOps for continuous integration and deployment, reducing deployment time by 50% and doubling the frequency of deployments to meet evolving business demands. \uf0b7 Managed Azure-based data warehouse infrastructure utilizing Azure Blob Storage, Azure Synapse Analytics, Azure Data Factory, and Azure Data Lake, ensuring uptime and enabling real-time data access for 50+ global stakeholders. \uf0b7 Leveraged Tableau for building interactive dashboards and visualizing key performance indicators, allowing real-time data analysis and better insights for stakeholders. \uf0b7 Conducted data management tasks, including data cleansing, validation, and"
+  },
+  {
+    "doc_id": "resume.txt",
+    "chunk_id": 8,
+    "text": "and better insights for stakeholders. \uf0b7 Conducted data management tasks, including data cleansing, validation, and enrichment, using Python and SQL to ensure accurate and up-to-date data for business analysis and reporting. EDUCATION Master of Science, Concordia University st Paul Jan 2022 - May 2024 | Minnesota, USA Information Technology and Management Bachelor of Technology, NRI Institute and Technology June 2018 \u2013 May 2022 | Vijayawada, India Electronics and Communication Engineering"
+  }
+]
