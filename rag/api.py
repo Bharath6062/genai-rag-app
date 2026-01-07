@@ -1,4 +1,5 @@
 from __future__ import annotations
+from fastapi.middleware.cors import CORSMiddleware
 
 from pathlib import Path
 import json
@@ -29,6 +30,14 @@ class AskRequest(BaseModel):
 
 
 app = FastAPI(title="Multi-Doc RAG API", version="2.0")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 client: OpenAI | None = None
 vectors: np.ndarray | None = None
