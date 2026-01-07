@@ -45,6 +45,9 @@ app = FastAPI(title="Resume RAG API", version="1.0")
 client: OpenAI | None = None
 vectors: np.ndarray | None = None
 chunks: list[str] | None = None
+@app.get("/health")
+def health():
+    return {"status": "ok"}
 
 
 @app.on_event("startup")
