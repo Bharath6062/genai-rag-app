@@ -31,10 +31,12 @@ def main():
     embeddings = []
     BATCH = 64
 
+    print(len(chunks), BATCH)
     for i in range(0, len(chunks), BATCH):
         batch = chunks[i:i+BATCH]
         resp = client.embeddings.create(model=EMBED_MODEL, input=batch)
         embeddings.extend([d.embedding for d in resp.data])
+    # print(resp)
 
     vectors = np.array(embeddings, dtype=np.float32)
     np.save(VECTORS_FILE, vectors)
