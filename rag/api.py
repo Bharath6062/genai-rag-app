@@ -16,7 +16,7 @@ META_FILE = Path("rag/out/meta.json")
 EMBED_MODEL = "text-embedding-3-small"
 CHAT_MODEL = "gpt-4o-mini"
 
-TOP_K = 3
+TOP_K =5
 MAX_CONTEXT_CHARS = 6000
 
 
@@ -119,26 +119,24 @@ def ask(req: AskRequest):
     context_text = "\n\n".join(context_blocks)
 
     prompt = f"""
-You are a strict analyst. Use ONLY the provided context.
-If the answer is not in the context, say exactly: Not found in the documents.
+You are comparing TWO documents: a Resume and a Job Description.
+
+Use ONLY the CONTEXT. If something is not explicitly in the context, say: Not found in the documents.
+
+Return in this exact format:
+
+MATCH (5 bullets):
+- ...
+
+GAPS / MISSING KEYWORDS (bullet list):
+- ...
+
+IMPROVEMENTS TO RESUME (bullet list):
+- ...
 
 CONTEXT:
 {context_text}
 
 QUESTION:
 {q}
-
-Rules:
-- If listing items, use bullet points.
-- Be short and specific.
-- Do not invent facts.
 """.strip()
-
-    resp = client.responses.create(model=CHAT_MODEL, input=prompt)
-
-    return {
-        "question": q,
-        "answer": resp.output_text.strip(),
-        "sources": used_sources,
-        "scores": used_scores,
-    }
