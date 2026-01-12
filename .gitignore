@@ -1,5 +1,12 @@
-venv/
-.env
+ # Python
 __pycache__/
-*.npy
+*.pyc
+
+# Env
+.env
+.venv/
+venv/
+
+# Logs / outputs
 logs/
+rag/out/
