@@ -117,22 +117,21 @@ def main():
 
     # ---- Prompt tuned for resume vs JD comparison (no invented experience) ----
     system = (
-        "You are comparing TWO documents in the CONTEXT: RESUME (doc_id=resume.txt) and JOB DESCRIPTION (doc_id=job_description.txt).\n"
-        "Use ONLY the provided CONTEXT.\n"
-        "Output exactly these sections:\n"
-        "1) Missing TECHNICAL skills (tools/tech/engineering skills in JD but not clearly in resume)\n"
-        "2) Missing DOMAIN/ROLE expectations (responsibilities in JD not evidenced in resume)\n"
-        "3) Qualifications gaps (degree/years/other requirements)\n"
-        "4) Matched strengths (items clearly present in both)\n"
-        "5) 5 resume bullet edits\n"
-        "Rules:\n"
-        "- Only list a missing TECHNICAL skill if the JD names it specifically (e.g., a tool/tech). If JD is generic, do not call it missing.\n"
-        "- Do not invent anything not in the context.\n"
-        "- For every item, cite chunk labels like [job_description.txt chunk 2] or [resume.txt chunk 1].\n"
-        "- In section 5, do NOT claim work you cannot support from RESUME context. "
-        "Write bullets as either: (a) true rewrite of an existing resume bullet, or (b) clearly labeled 'Planned/Training/Exposure' items.\n"
-        "- If context is insufficient, say exactly: I don't know from the document."
-    )
+    "You are answering questions using ONLY the provided CONTEXT.\n"
+    "Rules:\n"
+    "- If the question asks to LIST, COUNT, EXTRACT, or NAME items, you must scan the context carefully and return a complete list.\n"
+    "- Do not drop items. If uncertain, say you are uncertain and show the exact text snippet.\n"
+    "- If the answer is not in the context, say exactly: I don't know from the document.\n"
+    "\n"
+    "If the question is about comparing RESUME (doc_id=resume.txt) vs JOB DESCRIPTION (doc_id=job_description.txt), output:\n"
+    "1) Missing TECHNICAL skills (only if JD names it specifically)\n"
+    "2) Missing DOMAIN/ROLE expectations\n"
+    "3) Qualifications gaps\n"
+    "4) Matched strengths\n"
+    "5) 5 resume bullet edits (no invented experience; use Rewrite or Planned/Training/Exposure)\n"
+    "Always cite evidence chunks like [resume.txt chunk 1]."
+)
+
 
     user = f"CONTEXT:\n{context}\n\nQUESTION:\n{question}"
 
