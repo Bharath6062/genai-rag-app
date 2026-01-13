@@ -1,48 +1,43 @@
-# rag/embed_index_openai.py  (MULTI-DOC)
-import json
+from __future__ import annotations
+
 from pathlib import Path
+import json
 import numpy as np
 from dotenv import load_dotenv
 from openai import OpenAI
 
-EMBED_MODEL = "text-embedding-3-small"
+OUT_DIR = Path("rag/out")
+META_FILE = OUT_DIR / "meta.json"
+VECTORS_FILE = OUT_DIR / "vectors.npy"
 
-META_FILE = Path("rag/out/meta.json")
-VECTORS_FILE = Path("rag/out/vectors.npy")
+EMBED_MODEL = "text-embedding-3-small"
+BATCH = 128
+
 
 def main():
     load_dotenv()
     client = OpenAI()
 
     if not META_FILE.exists():
-        print(f"❌ Missing {META_FILE}. Run ingest.py first.")
-        return
+        raise RuntimeError(f"Missing {META_FILE}. Run ingest.py first.")
 
     meta = json.loads(META_FILE.read_text(encoding="utf-8"))
-    if not meta:
-        print("❌ meta.json is empty. Nothing to embed.")
-        return
+    texts = [m["text"] for m in meta]
+    if not texts:
+        raise RuntimeError("meta.json empty texts")
 
-    chunks = [m["text"] for m in meta]
-    print(f"Chunks loaded: {len(chunks)}")
-    print("Creating embeddings...")
-
-    # Batch embed (safe chunk sizes)
-    embeddings = []
-    BATCH = 64
-
-    print(len(chunks), BATCH)
-    for i in range(0, len(chunks), BATCH):
-        batch = chunks[i:i+BATCH]
+    vectors = []
+    for i in range(0, len(texts), BATCH):
+        batch = texts[i : i + BATCH]
         resp = client.embeddings.create(model=EMBED_MODEL, input=batch)
-        embeddings.extend([d.embedding for d in resp.data])
-    # print(resp)
+        vectors.extend([d.embedding for d in resp.data])
+        print(f"Embedded {min(i + BATCH, len(texts))}/{len(texts)}")
 
-    vectors = np.array(embeddings, dtype=np.float32)
-    np.save(VECTORS_FILE, vectors)
+    arr = np.array(vectors, dtype=np.float32)
+    VECTORS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    np.save(VECTORS_FILE, arr)
+    print(f"OK: wrote {arr.shape} -> {VECTORS_FILE}")
 
-    print(f"Embeddings saved to: {VECTORS_FILE}")
-    print(f"Vector shape: {vectors.shape}")
 
 if __name__ == "__main__":
     main()

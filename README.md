@@ -1,46 +1,22 @@
-\# Resume \& Job Description RAG System
+# GenAI RAG: Resume ↔ Job Description Analyzer
 
+A Retrieval-Augmented Generation (RAG) application that compares a resume against a job description using local embeddings, balanced retrieval, and evidence-backed answers.
 
+## What it does
+- Ingests documents (resume + job description)
+- Chunks text and builds vector embeddings
+- Retrieves relevant chunks using cosine similarity
+- Forces balanced retrieval across both documents
+- Generates answers strictly grounded in retrieved context
+- Logs evidence (source, chunk id, score) for transparency
 
-A Retrieval-Augmented Generation (RAG) app that answers natural-language questions over a resume and a job description.
+## Project Structure
+- rag/ingest.py — document ingestion and chunking
+- rag/embed_index_openai.py — embedding + vector index creation
+- rag/ask.py — retrieval, comparison logic, answering, logging
+- demo.ps1 — one-command demo runner
+- logs/ — run logs (ignored in git)
+- rag/out/ — chunk metadata + vectors (ignored in git)
 
-It uses OpenAI embeddings + vector similarity search to retrieve relevant chunks and returns answers with source citations.
-
-
-
-\## Tech Stack
-
-\- Python, FastAPI
-
-\- OpenAI API (Embeddings + Chat)
-
-\- NumPy
-
-\- HTML/JS frontend
-
-\- Git
-
-
-
-\## Project Flow (RAG)
-
-1\. Ingest text files from `data/docs/` and split into overlapping chunks
-
-2\. Generate embeddings for each chunk and save vectors + metadata
-
-3\. For a user question: embed the question → similarity search → top chunks → answer grounded in retrieved context
-
-
-
-\## Setup
-
-```bash
-
-python -m venv venv
-
-venv\\Scripts\\activate
-
-pip install -r requirements.txt
-
-
-
+## How to Run
+1. Add documents:
