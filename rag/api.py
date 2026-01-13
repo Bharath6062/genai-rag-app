@@ -86,57 +86,88 @@ def ask(req: AskRequest):
     if not q:
         raise HTTPException(status_code=400, detail="question cannot be empty")
 
-    # Embed question
-    q_resp = client.embeddings.create(model=EMBED_MODEL, input=[q])
+    # 1) Embed the question
+    q_resp = client.embeddings.create(model=EMBED_MODEL, input=q)
     q_vec = np.array(q_resp.data[0].embedding, dtype=np.float32)
-    q_vec = normalize(q_vec)
 
-    # Retrieve
-    scores = vectors @ q_vec
-    top_idx = np.argsort(-scores)[:TOP_K]
+    # 2) Normalize vectors for cosine similarity
+    v = vectors.astype(np.float32)
+    v_norm = v / (np.linalg.norm(v, axis=1, keepdims=True) + 1e-12)
+    q_norm = q_vec / (np.linalg.norm(q_vec) + 1e-12)
 
-    context_blocks = []
-    used_sources = []
-    used_scores = []
-    total_chars = 0
+    sims = v_norm @ q_norm
+    ranked = np.argsort(-sims)
 
-    for idx in top_idx:
-        idx = int(idx)
-        m = meta[idx]
-        block = (
-            f"[doc={m['doc_id']} chunk={m['chunk_id']} score={scores[idx]:.3f}]\n"
-            f"{texts[idx]}"
+    # 3) Balanced retrieval: try to include both resume and job description
+    resume_idx = []
+    jd_idx = []
+    for i in ranked:
+        m = meta[int(i)]
+        doc_id = m.get("doc_id") or m.get("source") or ""
+        if "resume" in doc_id.lower():
+            resume_idx.append(int(i))
+        elif "job" in doc_id.lower() or "description" in doc_id.lower():
+            jd_idx.append(int(i))
+
+    # pick top_k with balance (3 + 3), fallback to overall if not enough
+    k = min(6, len(meta))
+    picked = []
+    picked.extend(resume_idx[: max(1, k // 2)])
+    picked.extend(jd_idx[: max(1, k - len(picked))])
+
+    # fill remaining from global rank
+    for i in ranked:
+        i = int(i)
+        if len(picked) >= k:
+            break
+        if i not in picked:
+            picked.append(i)
+
+    # 4) Build context + retrieved list
+    context_parts = []
+    retrieved = []
+    for i in picked:
+        m = meta[int(i)]
+        doc_id = m.get("doc_id") or m.get("source") or "unknown"
+        chunk_id = m.get("chunk_id", "unknown")
+        txt = m.get("text") or texts[int(i)]
+        score = float(sims[int(i)])
+
+        context_parts.append(f"[{doc_id} chunk {chunk_id} score={score:.3f}]\n{txt}")
+        retrieved.append(
+            {
+                "doc_id": doc_id,
+                "chunk_id": chunk_id,
+                "score": score,
+                "text_preview": txt[:300],
+            }
         )
 
-        if total_chars + len(block) > MAX_CONTEXT_CHARS:
-            break
+    context = "\n\n---\n\n".join(context_parts)
 
-        context_blocks.append(block)
-        used_sources.append({"doc_id": m["doc_id"], "chunk_id": m["chunk_id"]})
-        used_scores.append(float(scores[idx]))
-        total_chars += len(block)
+    system = (
+        "Answer using ONLY the context. "
+        "If the context does not contain the answer, say: 'I don't know from the document.' "
+        "If the question asks to LIST/COUNT/EXTRACT items, be complete and do not drop items. "
+        "Always cite evidence like [resume.txt chunk 1]."
+    )
 
-    context_text = "\n\n".join(context_blocks)
+    user = f"CONTEXT:\n{context}\n\nQUESTION:\n{q}"
 
-    prompt = f"""
-You are comparing TWO documents: a Resume and a Job Description.
+    chat = client.chat.completions.create(
+        model=CHAT_MODEL,
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+    )
 
-Use ONLY the CONTEXT. If something is not explicitly in the context, say: Not found in the documents.
+    answer = chat.choices[0].message.content.strip()
 
-Return in this exact format:
-
-MATCH (5 bullets):
-- ...
-
-GAPS / MISSING KEYWORDS (bullet list):
-- ...
-
-IMPROVEMENTS TO RESUME (bullet list):
-- ...
-
-CONTEXT:
-{context_text}
-
-QUESTION:
-{q}
-""".strip()
+    # 5) IMPORTANT: return JSON (this fixes your null)
+    return {
+        "question": q,
+        "top_k": len(retrieved),
+        "retrieved": retrieved,
+        "answer": answer,
+    }
