@@ -10,3 +10,18 @@ venv/
 # Logs / outputs
 logs/
 rag/out/
+# Outputs
+rag/out/
+result.json
+
+# Local docs (keep samples only)
+data/docs/*.txt
+
+# Backups
+*.bak
+
+# Outputs
+rag/out/
+result.json
+*.bak
+
