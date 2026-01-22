@@ -19,8 +19,8 @@ from openai import OpenAI
 # -----------------------------
 # Versioning
 # -----------------------------
-APP_VERSION = "2.36-compare-polish"
-COMPARE_PROMPT_VERSION = "compare_v36_compare_polish"
+APP_VERSION = "2.37-filter-travel"
+COMPARE_PROMPT_VERSION = "compare_v37_filter_travel"
 
 
 # -----------------------------
@@ -138,6 +138,20 @@ _BAD_PREFIXES = (
     "qualifications",
     "what you'll do",
     "what you’ll do",
+)
+
+# filter non-skill / HR / logistics lines from requirements
+_BAD_CONTAINS = (
+    "travel occasionally",
+    "willingness to travel",
+    "willing to travel",
+    "evening and weekend",
+    "weekend work",
+    "as assigned",
+    "annual summit",
+    "monthly meetings",
+    "meet deadlines",
+    "local office",
 )
 
 
@@ -312,9 +326,12 @@ def _looks_like_requirement(s: str) -> bool:
     if len(s_low) < 12:
         return False
 
-    # DROP role-summary blobs (fixes "About the role" paragraph being selected)
-    # Real requirements should not be giant paragraphs.
+    # DROP role-summary blobs
     if len(s_str) > 350:
+        return False
+
+    # DROP HR / logistics lines (travel, weekend, etc.)
+    if any(x in s_low for x in _BAD_CONTAINS):
         return False
 
     # only block obvious connector-fragments (not lowercase rule)
@@ -647,16 +664,14 @@ def compare(req: CompareRequest) -> JSONResponse:
 
         gate = keyword_gate(r, resume_full)
 
-        # default decisions
         passes_threshold = best_score >= float(req.threshold)
         passes_gate = bool(gate.get("passes", True))
 
-        # EDUCATION OVERRIDE:
-        # don't mark degree requirements as gaps just because embeddings picked a bad chunk
+        # Education override
         r_low = r.lower()
         if any(k in r_low for k in ["bachelor", "master", "degree", "phd", "doctorate"]):
             if _resume_has_education(resume_full):
-                passes_threshold = True  # treat as satisfied
+                passes_threshold = True
 
         item = {
             "requirement": (r[:120] + "...") if len(r) > 123 else r,
