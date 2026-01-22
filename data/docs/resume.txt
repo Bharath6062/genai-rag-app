@@ -38,8 +38,8 @@ processing and improving the organization’s ability to derive actionable insig
 by 40% and ensure high data quality across 10TB+ of structured, semi-structured, and unstructured data.
  Utilized Pandas, NumPy, and SQLAlchemy for efficient data manipulation and transformation within the pipelines, 
 improving data management workflows.
- Implemented data validation and integrity checks (schema enforcement, null/duplicate checks) and ensured secure handling of sensitive data (RBAC/least privilege, audit logging) across Azure-based pipelines.
- Designed SQL Server schemas and improved query performance using indexing strategies and constraints (primary/foreign keys).
+ Implemented data validation and integrity checks and enforced data security, privacy, and PII handling using RBAC, least privilege access, and audit logging across Azure-based pipelines.
+ Designed SQL Server schemas using indexes, constraints, and keys (primary/foreign) to improve query performance and reliability.
  Integrated machine learning models with scikit-learn and TensorFlow into data pipelines, automating forecasting and 
 customer behavior prediction, achieving a 30% increase in accuracy and saving over 100 man-hours per month.
  Implemented CI/CD pipelines with Azure DevOps for continuous integration and deployment, reducing deployment time by 
