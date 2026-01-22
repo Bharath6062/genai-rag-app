@@ -1,413 +1,696 @@
 from __future__ import annotations
 
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse, JSONResponse
+from pydantic import BaseModel, Field
+
+from pathlib import Path
 import json
 import re
-from pathlib import Path
-from typing import Any
+import sqlite3
+import hashlib
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
 from dotenv import load_dotenv
 from openai import OpenAI
-from fastapi.middleware.cors import CORSMiddleware
+
 
 # -----------------------------
-# Versions
+# Versioning
 # -----------------------------
-APP_VERSION = "2.23-matched-gaps-gated"
-COMPARE_PROMPT_VERSION = "compare_v23_matched_gaps_gated"
+APP_VERSION = "2.36-compare-polish"
+COMPARE_PROMPT_VERSION = "compare_v36_compare_polish"
+
 
 # -----------------------------
-# Paths
+# Files
 # -----------------------------
 VECTORS_FILE = Path("rag/out/vectors.npy")
 META_FILE = Path("rag/out/meta.json")
+
+COMPARE_CACHE_DB = Path("rag/out/compare_cache.sqlite3")
+
 
 # -----------------------------
 # Models
 # -----------------------------
 EMBED_MODEL = "text-embedding-3-small"
+CHAT_MODEL = "gpt-4o-mini"  # kept for future use
+
 
 # -----------------------------
-# Defaults
+# Retrieval defaults
 # -----------------------------
-TOP_K_COMPARE = 8
+TOP_K_COMPARE = 8          # number of requirements to evaluate
+MAX_REQUIREMENTS = 30      # hard cap
 
-# Stricter threshold to avoid fake matches
-MATCH_THRESHOLD = 0.40
 
 # -----------------------------
 # App
 # -----------------------------
-app = FastAPI()
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app = FastAPI(title="GenAI RAG App", version=APP_VERSION)
 
+
+# -----------------------------
+# OpenAI client
+# -----------------------------
 load_dotenv()
-client = OpenAI()
-
-_CACHE: dict[str, Any] = {"meta": None, "vectors": None, "meta_mtime": None, "vec_mtime": None}
+_client: Optional[OpenAI] = None
 
 
-def _mtime(p: Path) -> float | None:
-    try:
-        return p.stat().st_mtime
-    except FileNotFoundError:
-        return None
+def get_client() -> OpenAI:
+    global _client
+    if _client is None:
+        _client = OpenAI()
+    return _client
 
 
-def load_index(force: bool = False) -> tuple[list[dict[str, Any]], np.ndarray]:
-    meta_mtime = _mtime(META_FILE)
-    vec_mtime = _mtime(VECTORS_FILE)
-
-    if meta_mtime is None or vec_mtime is None:
-        raise HTTPException(
-            status_code=500,
-            detail="Index missing. Run: python rag/ingest.py (need rag/out/meta.json and rag/out/vectors.npy)"
-        )
-
-    if (
-        force
-        or _CACHE["meta"] is None
-        or _CACHE["vectors"] is None
-        or _CACHE["meta_mtime"] != meta_mtime
-        or _CACHE["vec_mtime"] != vec_mtime
-    ):
-        meta = json.loads(META_FILE.read_text(encoding="utf-8"))
-        vectors = np.load(VECTORS_FILE)
-        _CACHE.update({"meta": meta, "vectors": vectors, "meta_mtime": meta_mtime, "vec_mtime": vec_mtime})
-
-    return _CACHE["meta"], _CACHE["vectors"]
+# -----------------------------
+# Load index (cached)
+# -----------------------------
+_vectors: Optional[np.ndarray] = None
+_meta: Optional[List[Dict[str, Any]]] = None
 
 
-def _embed_query(q: str) -> np.ndarray:
-    resp = client.embeddings.create(model=EMBED_MODEL, input=q)
-    return np.array(resp.data[0].embedding, dtype=np.float32)
+def load_index() -> Tuple[np.ndarray, List[Dict[str, Any]]]:
+    global _vectors, _meta
+    if _vectors is None or _meta is None:
+        if not VECTORS_FILE.exists() or not META_FILE.exists():
+            raise RuntimeError(
+                "Index not found. Run: python rag/ingest.py to generate rag/out/vectors.npy and rag/out/meta.json"
+            )
+        _vectors = np.load(VECTORS_FILE)
+        _meta = json.loads(META_FILE.read_text(encoding="utf-8"))
+        if _vectors.shape[0] != len(_meta):
+            raise RuntimeError("Index mismatch: vectors rows != meta entries")
+    return _vectors, _meta
 
 
-def _cosine_scores(vectors: np.ndarray, q: np.ndarray) -> np.ndarray:
-    v_norm = vectors / (np.linalg.norm(vectors, axis=1, keepdims=True) + 1e-12)
-    q_norm = q / (np.linalg.norm(q) + 1e-12)
-    return v_norm @ q_norm
+# -----------------------------
+# Embeddings (batched)
+# -----------------------------
+def embed_texts(texts: List[str]) -> np.ndarray:
+    """
+    Returns float32 matrix of shape (len(texts), dim)
+    using ONE OpenAI embeddings API call.
+    """
+    if not texts:
+        return np.zeros((0, 0), dtype=np.float32)
+
+    c = get_client()
+    res = c.embeddings.create(model=EMBED_MODEL, input=texts)
+    return np.array([d.embedding for d in res.data], dtype=np.float32)
 
 
-def retrieve(meta: list[dict[str, Any]], vectors: np.ndarray, question: str, top_k: int) -> list[dict[str, Any]]:
-    qv = _embed_query(question)
-    sims = _cosine_scores(vectors, qv)
-    idx = np.argsort(-sims)[:top_k]
+def embed_text(text: str) -> np.ndarray:
+    return embed_texts([text])[0]
 
+
+def cosine_scores(matrix: np.ndarray, v: np.ndarray) -> np.ndarray:
+    v_norm = np.linalg.norm(v) + 1e-12
+    m_norm = np.linalg.norm(matrix, axis=1) + 1e-12
+    return (matrix @ v) / (m_norm * v_norm)
+
+
+def top_k_retrieve(query: str, k: int) -> List[Dict[str, Any]]:
+    vectors, meta = load_index()
+    qv = embed_text(query)
+    scores = cosine_scores(vectors, qv)
+    idx = np.argsort(scores)[::-1][:k]
     out = []
     for i in idx:
-        m = meta[int(i)]
-        txt = m.get("text", "")
-        out.append({
-            "doc_id": m.get("doc_id"),
-            "doc_type": m.get("doc_type"),
-            "chunk_id": m.get("chunk_id"),
-            "score": float(sims[int(i)]),
-            "text_preview": (txt[:320] + "...") if len(txt) > 320 else txt,
-        })
+        m = dict(meta[int(i)])
+        m["score"] = float(scores[int(i)])
+        m["text_preview"] = (m.get("text") or "")[:320].replace("\r", "")
+        out.append(m)
     return out
 
 
-def extract_requirements(job_text: str, max_items: int = 10) -> list[str]:
+# -----------------------------
+# Requirements extraction (clean, stitch fragments, dedupe)
+# -----------------------------
+_BAD_PREFIXES = (
+    "ignite partners",
+    "about the role",
+    "other duties",
+    "other responsibilities",
+    "qualifications",
+    "what you'll do",
+    "what you’ll do",
+)
+
+
+def _normalize_ws(s: str) -> str:
+    s = s.replace("\u2013", "-").replace("\u2014", "-")
+    s = s.replace("\u00a0", " ")
+    s = re.sub(r"[ \t]+", " ", s)
+    s = re.sub(r"\s+\n", "\n", s)
+    return s.strip()
+
+
+# Merge helpers
+_FRAGMENT_PREFIXES = (
+    "and ",
+    "or ",
+    "with ",
+    "including ",
+    "leveraging ",
+    "by leveraging ",
+    "as well as ",
+    "also ",
+)
+
+_EDU_PREFIXES = (
+    "bachelor",
+    "master",
+    "phd",
+    "doctorate",
+    "degree",
+)
+
+_EDU_CONTINUATIONS = (
+    "or an equivalent combination",
+    "or equivalent combination",
+    "or equivalent",
+    "related field",
+    "in a related field",
+    "in related field",
+    "related",
+)
+
+
+def _is_edu_line(s: str) -> bool:
+    low = s.lower().strip()
+    return any(low.startswith(p) for p in _EDU_PREFIXES)
+
+
+def _is_edu_continuation(s: str) -> bool:
+    low = s.lower().strip()
+    return any(low.startswith(p) for p in _EDU_CONTINUATIONS)
+
+
+def _is_fragment_for_merging(s: str) -> bool:
     """
-    Deterministic requirement extraction:
-    - remove headings
-    - keep lines with requirement-like keywords
-    - dedupe
+    Used ONLY for merging (not filtering).
     """
-    t = job_text.replace("\r\n", "\n").replace("\r", "\n")
+    s2 = s.strip()
+    if not s2:
+        return False
+    low = s2.lower()
+    if any(low.startswith(p) for p in _FRAGMENT_PREFIXES):
+        return True
+    # starts lowercase -> likely continuation in non-bulleted JDs
+    if s2 and s2[0].islower():
+        return True
+    # short connector-ish junk
+    if len(low) <= 35 and (low.startswith(("and", "or")) or low.endswith(("...", ","))):
+        return True
+    return False
 
-    lines = []
-    for line in t.split("\n"):
-        line = line.strip(" \t-•")
-        if line:
-            lines.append(line)
 
-    drop_exact = {
-        "ignite partners",
-        "about the role",
-        "what you'll do",
-        "what you’ll do",
-        "other responsibilities",
-        "qualifications",
-    }
+def _is_fragment_prefix_only(s: str) -> bool:
+    """
+    Used for FILTERING: only reject obvious connector fragments.
+    """
+    low = s.lower().strip()
+    return any(low.startswith(p) for p in _FRAGMENT_PREFIXES)
 
-    keep_keywords = [
-        "sql", "sql server", "azure", "data factory", "azure data factory",
-        "ssis", "function apps", "logic apps",
-        "etl", "elt", "pipeline",
-        "dimensional", "relational", "model", "modeling",
-        "kafka", "event hub", "sftp", "stored procedure",
-        "security", "privacy", "integrity",
-        "communication", "problem-solving", "problem solving",
-        "test", "testing", "reliability",
-        "experience", "expertise", "ability",
-    ]
 
-    reqs = []
+def _join_clean(a: str, b: str) -> str:
+    a = a.rstrip()
+    b = b.lstrip()
+    if a.endswith(("-", "–", "—")):
+        return f"{a} {b}"
+    if a.endswith((".", ":", ")", "]")):
+        return f"{a} {b}"
+    return f"{a} {b}"
+
+
+def _merge_requirement_fragments(items: List[str]) -> List[str]:
+    """
+    Merge continuation fragments into the prior line.
+    Also merges multi-line education requirements into one clean line.
+    """
+    out: List[str] = []
+    i = 0
+    while i < len(items):
+        cur = items[i].strip()
+        if not cur:
+            i += 1
+            continue
+
+        # EDUCATION MERGE
+        if _is_edu_line(cur):
+            merged = cur
+            j = i + 1
+            while j < len(items):
+                nxt = items[j].strip()
+                if not nxt:
+                    j += 1
+                    continue
+
+                if _is_edu_line(nxt) or _is_edu_continuation(nxt):
+                    merged = _join_clean(merged, nxt)
+                    j += 1
+                    continue
+
+                low = nxt.lower().strip()
+                if low in {"related", "related field"}:
+                    merged = _join_clean(merged, nxt)
+                    j += 1
+                    continue
+
+                break
+
+            out.append(merged)
+            i = j
+            continue
+
+        # FRAGMENT MERGE
+        if _is_fragment_for_merging(cur) and out:
+            out[-1] = _join_clean(out[-1], cur)
+            i += 1
+            continue
+
+        out.append(cur)
+        i += 1
+
+    out = [re.sub(r"\s+", " ", x).strip() for x in out if x.strip()]
+    return out
+
+
+def _split_into_sentences_or_bullets(text: str) -> List[str]:
+    """
+    Returns candidate requirement-like chunks.
+    - If bullets exist: use bullets.
+    - Else: line-based chunks with light semicolon split, then merge fragments.
+    """
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+
+    bullets = []
+    for ln in lines:
+        if ln.startswith(("-", "•", "*")):
+            bullets.append(ln.lstrip("-•* ").strip())
+    if bullets:
+        return _merge_requirement_fragments(bullets)
+
+    parts: List[str] = []
+    for ln in lines:
+        for p in re.split(r";+", ln):
+            p = p.strip()
+            if p:
+                parts.append(p)
+
+    return _merge_requirement_fragments(parts)
+
+
+def _looks_like_requirement(s: str) -> bool:
+    s_str = s.strip()
+    s_low = s_str.lower()
+
+    if len(s_low) < 12:
+        return False
+
+    # DROP role-summary blobs (fixes "About the role" paragraph being selected)
+    # Real requirements should not be giant paragraphs.
+    if len(s_str) > 350:
+        return False
+
+    # only block obvious connector-fragments (not lowercase rule)
+    if _is_fragment_prefix_only(s_str):
+        return False
+
+    if any(s_low.startswith(p) for p in _BAD_PREFIXES):
+        return False
+
+    if s_low in {"qualifications", "responsibilities", "about", "as assigned"}:
+        return False
+
+    return True
+
+
+def _dedupe_keep_order(items: List[str]) -> List[str]:
     seen = set()
-
-    for s in lines:
-        sl = s.lower().strip(" :.-")
-
-        if sl in drop_exact:
-            continue
-        if len(s) < 18:
-            continue
-        if not any(k in sl for k in keep_keywords):
-            continue
-
-        key = re.sub(r"\s+", " ", sl)
+    out = []
+    for x in items:
+        key = re.sub(r"[^a-z0-9]+", " ", x.lower()).strip()
+        key = re.sub(r"\s+", " ", key)
         if key in seen:
             continue
         seen.add(key)
+        out.append(x)
+    return out
 
-        if len(s) > 220:
-            s = s[:217] + "..."
 
-        reqs.append(s)
-        if len(reqs) >= max_items:
+def extract_requirements_from_job_text(job_text: str, limit: int = 14) -> List[str]:
+    job_text = _normalize_ws(job_text)
+
+    candidates = _split_into_sentences_or_bullets(job_text)
+    candidates = [c for c in candidates if _looks_like_requirement(c)]
+    candidates = _dedupe_keep_order(candidates)
+
+    scored: List[Tuple[int, str]] = []
+    for c in candidates:
+        low = c.lower()
+        score = 0
+        if "experience" in low:
+            score += 3
+        if "sql" in low:
+            score += 2
+        if "azure" in low:
+            score += 2
+        if "etl" in low or "elt" in low:
+            score += 2
+        if "ability" in low or "skills" in low:
+            score += 1
+        if "degree" in low:
+            score += 1
+        scored.append((score, c))
+
+    scored.sort(key=lambda t: t[0], reverse=True)
+    picked = [c for _, c in scored[:limit]]
+
+    picked_set = set(picked)
+    final = [c for c in candidates if c in picked_set]
+    return final[:limit]
+
+
+# -----------------------------
+# Simple resume education presence check
+# -----------------------------
+def _resume_has_education(resume_text: str) -> bool:
+    low = resume_text.lower()
+    return any(x in low for x in ["education", "bachelor", "master", "b.tech", "bachelor of", "master of"])
+
+
+# -----------------------------
+# Keyword gates (simple + explainable)
+# -----------------------------
+KEYWORD_GATES = [
+    {"trigger": "azure data factory", "required_keywords": ["azure data factory", "data factory", "adf"]},
+    {"trigger": "sql server", "required_keywords": ["sql server"]},
+    {"trigger": "dimensional", "required_keywords": ["dimensional", "star schema", "snowflake schema"]},
+    {"trigger": "indexes", "required_keywords": ["index", "indexes"]},
+    {"trigger": "security", "required_keywords": ["security", "privacy", "pii", "compliance"]},
+]
+
+
+def keyword_gate(requirement: str, resume_text: str) -> Dict[str, Any]:
+    req_low = requirement.lower()
+    trigger = None
+    req_keys: List[str] = []
+    for g in KEYWORD_GATES:
+        if g["trigger"] in req_low:
+            trigger = g["trigger"]
+            req_keys = g["required_keywords"]
             break
 
-    return reqs
+    found = []
+    missing = []
+    if trigger:
+        resume_low = resume_text.lower()
+        for k in req_keys:
+            if k in resume_low:
+                found.append(k)
+            else:
+                missing.append(k)
 
-
-def best_match_against_docs(
-    meta: list[dict[str, Any]],
-    vectors: np.ndarray,
-    query: str,
-    doc_type: str,
-) -> dict[str, Any]:
-    """
-    Returns best matching chunk among only doc_type (e.g., 'resume') for the given query.
-    """
-    qv = _embed_query(query)
-    sims = _cosine_scores(vectors, qv)
-
-    best_i = None
-    best_score = -1.0
-
-    for i, m in enumerate(meta):
-        if m.get("doc_type") != doc_type:
-            continue
-        score = float(sims[i])
-        if score > best_score:
-            best_score = score
-            best_i = i
-
-    if best_i is None:
-        return {"score": None, "doc_id": None, "chunk_id": None, "text_preview": ""}
-
-    txt = meta[best_i].get("text", "")
+    passes = True if not trigger else (len(found) > 0)
     return {
-        "score": round(best_score, 3),
-        "doc_id": meta[best_i].get("doc_id"),
-        "chunk_id": meta[best_i].get("chunk_id"),
-        "text_preview": (txt[:260] + "...") if len(txt) > 260 else txt,
+        "trigger": trigger,
+        "required_keywords": req_keys,
+        "found_keywords": found,
+        "missing_keywords": missing,
+        "passes": passes,
     }
 
 
 def confidence_label(score: float) -> str:
     if score >= 0.55:
         return "HIGH"
-    if score >= 0.45:
+    if score >= 0.42:
         return "MEDIUM"
     return "LOW"
 
 
-def keyword_gate(requirement: str, resume_text: str) -> bool:
-    """
-    If a requirement contains certain keywords, demand those keywords (or close variants)
-    appear in the matched resume chunk. This kills fake semantic matches.
-    """
-    r = requirement.lower()
-    t = resume_text.lower()
-
-    gates = [
-        ("sql server", ["sql server"]),
-        ("azure data factory", ["data factory", "adf"]),
-        ("data factory", ["data factory", "adf"]),
-        ("ssis", ["ssis"]),
-        ("logic apps", ["logic app"]),
-        ("function apps", ["function app"]),
-        ("indexes", ["index", "indexes"]),
-        ("constraints", ["constraint", "constraints"]),
-        ("views", ["view", "views"]),
-        ("stored procedure", ["stored procedure", "stored procedures"]),
-        ("dimensional", ["dimensional", "star schema", "snowflake schema"]),
-        ("relational", ["relational"]),
-        ("security", ["security", "privacy", "pii", "compliance", "integrity"]),
-        ("privacy", ["privacy", "pii", "compliance"]),
-    ]
-
-    for key, must_have in gates:
-        if key in r:
-            return any(m in t for m in must_have)
-
-    return True
+# -----------------------------
+# Compare cache
+# -----------------------------
+def _cache_init() -> None:
+    COMPARE_CACHE_DB.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(COMPARE_CACHE_DB) as con:
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS compare_cache (
+              key TEXT PRIMARY KEY,
+              value TEXT NOT NULL
+            )
+            """
+        )
+        con.commit()
 
 
-def is_non_skill_requirement(requirement: str) -> bool:
-    """
-    Filter out stuff we don't want to pretend is a 'matched skill'
-    (degree, travel, etc.).
-    """
-    r = requirement.lower()
-    bad_markers = [
-        "bachelor", "master", "degree",
-        "travel", "evening", "weekend",
-        "other duties", "as assigned",
-        "annual", "monthly meetings",
-    ]
-    return any(b in r for b in bad_markers)
+def _cache_key(payload: Dict[str, Any]) -> str:
+    raw = json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
 
 
+def cache_get(key: str) -> Optional[Dict[str, Any]]:
+    if not COMPARE_CACHE_DB.exists():
+        return None
+    with sqlite3.connect(COMPARE_CACHE_DB) as con:
+        row = con.execute("SELECT value FROM compare_cache WHERE key=?", (key,)).fetchone()
+        if not row:
+            return None
+        return json.loads(row[0])
+
+
+def cache_put(key: str, value: Dict[str, Any]) -> None:
+    _cache_init()
+    with sqlite3.connect(COMPARE_CACHE_DB) as con:
+        con.execute(
+            "INSERT OR REPLACE INTO compare_cache(key,value) VALUES(?,?)",
+            (key, json.dumps(value, ensure_ascii=False)),
+        )
+        con.commit()
+
+
+# -----------------------------
+# API models
+# -----------------------------
 class CompareRequest(BaseModel):
-    question: str | None = None
-    top_k: int | None = None
+    question: str = "Compare resume vs job description."
+    top_k: int = Field(default=TOP_K_COMPARE, ge=1, le=MAX_REQUIREMENTS)
+    threshold: float = Field(default=0.4, ge=0.0, le=1.0)
 
 
-@app.get("/health")
-def health():
-    try:
-        load_index()
-        index_ok = True
-    except Exception:
-        index_ok = False
-
-    return {
-        "status": "ok",
-        "app_version": APP_VERSION,
-        "compare_prompt_version": COMPARE_PROMPT_VERSION,
-        "index_ok": index_ok,
-        "api_file": str(Path(__file__).resolve()),
-        "cwd": str(Path.cwd().resolve()),
-    }
-
-
-@app.post("/compare")
-def compare(req: CompareRequest):
-    meta, vectors = load_index()
-
-    question = req.question or "Compare resume vs job description."
-    top_k = int(req.top_k or TOP_K_COMPARE)
-
-    retrieved = retrieve(meta, vectors, question, top_k=top_k)
-
-    # Build job text from retrieved job chunks (full text from meta)
-    job_chunks = []
-    for r in retrieved:
-        if r.get("doc_type") != "job":
-            continue
-        for m in meta:
-            if m.get("doc_id") == r["doc_id"] and m.get("chunk_id") == r["chunk_id"]:
-                job_chunks.append(m.get("text", ""))
-                break
-
-    job_text = "\n".join(job_chunks)
-    requirements = extract_requirements(job_text, max_items=10)
-
-    matched = []
-    gaps = []
-
-    for req_line in requirements:
-        bm = best_match_against_docs(meta, vectors, req_line, doc_type="resume")
-        score = float(bm.get("score") or 0.0)
-        resume_txt = bm.get("text_preview") or ""
-
-        item = {
-            "requirement": req_line,
-            "score": score,
-            "confidence": confidence_label(score),
-            "best_resume_match": bm,
-        }
-
-        # Don't pretend degree/travel is a "matched skill"
-        if is_non_skill_requirement(req_line):
-            gaps.append(item)
-            continue
-
-        ok = (score >= MATCH_THRESHOLD) and keyword_gate(req_line, resume_txt)
-
-        if ok:
-            matched.append(item)
-        else:
-            gaps.append(item)
-
-    sources = [f'{r["doc_id"]} chunk {r["chunk_id"]}' for r in retrieved]
-    scores = [round(float(r["score"]), 3) for r in retrieved]
-
-    return {
-        "status": "ok",
-        "question": question,
-        "top_k": top_k,
-        "requirements": requirements,
-        "threshold": MATCH_THRESHOLD,
-        "matched": matched,
-        "gaps": gaps,
-        "retrieved": retrieved,
-        "sources": sources,
-        "scores": scores,
-        "app_version": APP_VERSION,
-    }
-
-from fastapi.responses import HTMLResponse
-
+# -----------------------------
+# Routes
+# -----------------------------
 @app.get("/", response_class=HTMLResponse)
-def home():
+def home() -> str:
+    return f"""
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>GenAI RAG App</title>
+  <style>
+    body {{ font-family: Arial, sans-serif; margin: 40px; max-width: 900px; }}
+    code, pre {{ background:#f4f4f4; padding: 8px; border-radius: 8px; }}
+    button {{ padding: 10px 14px; margin-right: 8px; cursor: pointer; }}
+    .row {{ margin: 16px 0; }}
+    .pill {{ display:inline-block; padding: 2px 8px; border-radius: 999px; background:#eee; margin-left:8px; }}
+  </style>
+</head>
+<body>
+  <h1>GenAI RAG App <span class="pill">v{APP_VERSION}</span></h1>
+  <p>This app compares a Resume vs Job Description using embeddings + a simple matching rubric.</p>
+
+  <div class="row">
+    <button onclick="location.href='/docs'">Open API Docs</button>
+    <button onclick="location.href='/compare'">Open Compare UI</button>
+  </div>
+
+  <h3>Quick commands</h3>
+  <pre><code>curl.exe -s http://127.0.0.1:8021/health
+curl.exe -s -X POST http://127.0.0.1:8021/compare -H "Content-Type: application/json" -d "{{}}"</code></pre>
+
+</body>
+</html>
+"""
+
+
+@app.get("/compare", response_class=HTMLResponse)
+def compare_ui() -> str:
     return """
 <!doctype html>
 <html>
 <head>
   <meta charset="utf-8"/>
-  <title>GenAI RAG Compare</title>
+  <title>Compare</title>
   <style>
-    body { font-family: Arial, sans-serif; padding: 20px; max-width: 900px; margin: auto; }
-    input { width: 100%; padding: 10px; font-size: 14px; }
-    button { padding: 10px 16px; font-size: 14px; margin-top: 10px; cursor: pointer; }
-    pre { background: #f5f5f5; padding: 12px; overflow: auto; }
+    body { font-family: Arial, sans-serif; margin: 40px; max-width: 980px; }
+    button { padding: 10px 14px; cursor: pointer; }
+    pre { background:#f4f4f4; padding: 12px; border-radius: 8px; overflow:auto; }
+    input { padding: 8px; width: 120px; }
+    .row { margin: 12px 0; }
+    label { display:inline-block; width: 90px; }
   </style>
 </head>
 <body>
-  <h2>GenAI RAG App — Compare</h2>
-  <p>This page calls <code>/compare</code> (POST) and prints JSON.</p>
-
-  <label>Question</label>
-  <input id="q" value="Compare resume vs job description."/>
-
-  <label style="margin-top:10px; display:block;">top_k</label>
-  <input id="k" value="8"/>
-
-  <button onclick="run()">Run Compare</button>
-
-  <h3>Result</h3>
-  <pre id="out">Click “Run Compare”</pre>
+  <h1>Compare UI</h1>
+  <div class="row">
+    <label>top_k</label><input id="top_k" value="8"/>
+    <label style="margin-left:20px;">threshold</label><input id="threshold" value="0.4"/>
+  </div>
+  <div class="row">
+    <button onclick="runCompare()">Run Compare</button>
+    <button onclick="location.href='/'" style="margin-left:8px;">Home</button>
+  </div>
+  <pre id="out">(click "Run Compare")</pre>
 
 <script>
-async function run(){
-  const q = document.getElementById("q").value;
-  const k = parseInt(document.getElementById("k").value || "8", 10);
+async function runCompare(){
+  const top_k = parseInt(document.getElementById('top_k').value || '8', 10);
+  const threshold = parseFloat(document.getElementById('threshold').value || '0.4');
+  const payload = { top_k, threshold };
 
-  const res = await fetch("/compare", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ question: q, top_k: k })
+  const res = await fetch('/compare', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
   });
 
-  const text = await res.text();
-  try { document.getElementById("out").textContent = JSON.stringify(JSON.parse(text), null, 2); }
-  catch(e) { document.getElementById("out").textContent = text; }
+  const txt = await res.text();
+  document.getElementById('out').textContent = txt;
 }
 </script>
 </body>
 </html>
 """
 
+
+@app.get("/health")
+def health() -> Dict[str, Any]:
+    index_ok = VECTORS_FILE.exists() and META_FILE.exists()
+    return {
+        "status": "ok",
+        "app_version": APP_VERSION,
+        "compare_prompt_version": COMPARE_PROMPT_VERSION,
+        "index_ok": bool(index_ok),
+        "api_file": str(Path(__file__).resolve()),
+        "cwd": str(Path.cwd().resolve()),
+    }
+
+
+@app.post("/compare")
+def compare(req: CompareRequest) -> JSONResponse:
+    vectors, meta = load_index()
+
+    resume_texts = [m.get("text", "") for m in meta if m.get("doc_type") == "resume"]
+    job_texts = [m.get("text", "") for m in meta if m.get("doc_type") == "job"]
+
+    if not resume_texts:
+        raise HTTPException(
+            status_code=400,
+            detail="No resume chunks found in index. Ensure resume.txt is in data/docs and re-run ingest.",
+        )
+    if not job_texts:
+        raise HTTPException(
+            status_code=400,
+            detail="No job chunks found in index. Ensure jd.txt is in data/docs and re-run ingest.",
+        )
+
+    resume_full = _normalize_ws("\n".join(resume_texts))
+    job_full = _normalize_ws("\n".join(job_texts))
+
+    req_limit = int(max(1, min(req.top_k, MAX_REQUIREMENTS)))
+    requirements = extract_requirements_from_job_text(job_full, limit=req_limit)
+
+    payload = {
+        "question": req.question,
+        "top_k": req.top_k,
+        "threshold": req.threshold,
+        "requirements": requirements,
+        "compare_prompt_version": COMPARE_PROMPT_VERSION,
+        "embed_model": EMBED_MODEL,
+        "app_version": APP_VERSION,
+    }
+
+    key = _cache_key(payload)
+    cached = cache_get(key)
+    if cached:
+        cached["app_version"] = APP_VERSION
+        cached["compare_prompt_version"] = COMPARE_PROMPT_VERSION
+        return JSONResponse(cached)
+
+    resume_idx = [i for i, m in enumerate(meta) if m.get("doc_type") == "resume"]
+    if not resume_idx:
+        raise HTTPException(status_code=400, detail="No resume chunks present after filtering doc_type=resume.")
+
+    resume_chunks = [meta[i] for i in resume_idx]
+    resume_matrix = vectors[resume_idx]
+
+    req_embeddings = embed_texts(requirements)
+
+    matched = []
+    likely_matched_needs_evidence = []
+    gaps = []
+
+    for r, rv in zip(requirements, req_embeddings):
+        scores = cosine_scores(resume_matrix, rv)
+        best_j = int(np.argmax(scores))
+        best_score = float(scores[best_j])
+        best_meta = resume_chunks[best_j]
+
+        gate = keyword_gate(r, resume_full)
+
+        # default decisions
+        passes_threshold = best_score >= float(req.threshold)
+        passes_gate = bool(gate.get("passes", True))
+
+        # EDUCATION OVERRIDE:
+        # don't mark degree requirements as gaps just because embeddings picked a bad chunk
+        r_low = r.lower()
+        if any(k in r_low for k in ["bachelor", "master", "degree", "phd", "doctorate"]):
+            if _resume_has_education(resume_full):
+                passes_threshold = True  # treat as satisfied
+
+        item = {
+            "requirement": (r[:120] + "...") if len(r) > 123 else r,
+            "score": round(best_score, 3),
+            "confidence": confidence_label(best_score),
+            "passes_threshold": passes_threshold,
+            "passes_keyword_gate": passes_gate,
+            "keyword_gate": gate,
+            "best_resume_match": {
+                "doc_id": best_meta.get("doc_id"),
+                "chunk_id": best_meta.get("chunk_id"),
+                "text_preview": (best_meta.get("text", "")[:260]).replace("\r", ""),
+            },
+        }
+
+        if passes_threshold and passes_gate:
+            matched.append(item)
+        elif passes_threshold and (not passes_gate):
+            likely_matched_needs_evidence.append(item)
+        else:
+            gaps.append(item)
+
+    out = {
+        "status": "ok",
+        "question": req.question,
+        "top_k": req.top_k,
+        "threshold": req.threshold,
+        "requirements": requirements,
+        "matched": matched,
+        "likely_matched_needs_evidence": likely_matched_needs_evidence,
+        "gaps": gaps,
+        "app_version": APP_VERSION,
+        "compare_prompt_version": COMPARE_PROMPT_VERSION,
+    }
+
+    cache_put(key, out)
+    return JSONResponse(out)
