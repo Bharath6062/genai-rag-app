@@ -19,8 +19,8 @@ from openai import OpenAI
 # -----------------------------
 # Versioning
 # -----------------------------
-APP_VERSION = "2.37-filter-travel"
-COMPARE_PROMPT_VERSION = "compare_v37_filter_travel"
+APP_VERSION = "2.40-cachehash-security-threshold"
+COMPARE_PROMPT_VERSION = "compare_v40_cachehash_security_threshold"
 
 
 # -----------------------------
@@ -28,7 +28,6 @@ COMPARE_PROMPT_VERSION = "compare_v37_filter_travel"
 # -----------------------------
 VECTORS_FILE = Path("rag/out/vectors.npy")
 META_FILE = Path("rag/out/meta.json")
-
 COMPARE_CACHE_DB = Path("rag/out/compare_cache.sqlite3")
 
 
@@ -111,20 +110,6 @@ def cosine_scores(matrix: np.ndarray, v: np.ndarray) -> np.ndarray:
     v_norm = np.linalg.norm(v) + 1e-12
     m_norm = np.linalg.norm(matrix, axis=1) + 1e-12
     return (matrix @ v) / (m_norm * v_norm)
-
-
-def top_k_retrieve(query: str, k: int) -> List[Dict[str, Any]]:
-    vectors, meta = load_index()
-    qv = embed_text(query)
-    scores = cosine_scores(vectors, qv)
-    idx = np.argsort(scores)[::-1][:k]
-    out = []
-    for i in idx:
-        m = dict(meta[int(i)])
-        m["score"] = float(scores[int(i)])
-        m["text_preview"] = (m.get("text") or "")[:320].replace("\r", "")
-        out.append(m)
-    return out
 
 
 # -----------------------------
@@ -451,6 +436,17 @@ def confidence_label(score: float) -> str:
     return "LOW"
 
 
+def effective_threshold(requirement: str, base: float) -> float:
+    """
+    Keeps global threshold strict, but relaxes slightly for security/privacy style requirements
+    where semantic phrasing varies a lot.
+    """
+    r = requirement.lower()
+    if any(k in r for k in ["security", "privacy", "pii", "compliance"]):
+        return max(0.34, base - 0.06)
+    return base
+
+
 # -----------------------------
 # Compare cache
 # -----------------------------
@@ -623,6 +619,10 @@ def compare(req: CompareRequest) -> JSONResponse:
     resume_full = _normalize_ws("\n".join(resume_texts))
     job_full = _normalize_ws("\n".join(job_texts))
 
+    # Permanent cache invalidation on content changes
+    resume_hash = hashlib.sha256(resume_full.encode("utf-8")).hexdigest()
+    job_hash = hashlib.sha256(job_full.encode("utf-8")).hexdigest()
+
     req_limit = int(max(1, min(req.top_k, MAX_REQUIREMENTS)))
     requirements = extract_requirements_from_job_text(job_full, limit=req_limit)
 
@@ -634,6 +634,8 @@ def compare(req: CompareRequest) -> JSONResponse:
         "compare_prompt_version": COMPARE_PROMPT_VERSION,
         "embed_model": EMBED_MODEL,
         "app_version": APP_VERSION,
+        "resume_hash": resume_hash,
+        "job_hash": job_hash,
     }
 
     key = _cache_key(payload)
@@ -664,7 +666,8 @@ def compare(req: CompareRequest) -> JSONResponse:
 
         gate = keyword_gate(r, resume_full)
 
-        passes_threshold = best_score >= float(req.threshold)
+        thr = effective_threshold(r, float(req.threshold))
+        passes_threshold = best_score >= thr
         passes_gate = bool(gate.get("passes", True))
 
         # Education override
