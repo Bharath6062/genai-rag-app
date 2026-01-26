@@ -1,22 +1,34 @@
-# GenAI RAG: Resume ↔ Job Description Analyzer
+# Resume–Job Description Matcher (GenAI + Rules)
 
-A Retrieval-Augmented Generation (RAG) application that compares a resume against a job description using local embeddings, balanced retrieval, and evidence-backed answers.
+## Problem
+Candidates don’t know why their resume fails ATS screening.
 
-## What it does
-- Ingests documents (resume + job description)
-- Chunks text and builds vector embeddings
-- Retrieves relevant chunks using cosine similarity
-- Forces balanced retrieval across both documents
-- Generates answers strictly grounded in retrieved context
-- Logs evidence (source, chunk id, score) for transparency
+## Solution
+A deterministic tool that compares a resume with a job description using:
+- semantic embeddings
+- keyword evidence checks
+- clean requirement extraction
+- cache-safe comparisons
 
-## Project Structure
-- rag/ingest.py — document ingestion and chunking
-- rag/embed_index_openai.py — embedding + vector index creation
-- rag/ask.py — retrieval, comparison logic, answering, logging
-- demo.ps1 — one-command demo runner
-- logs/ — run logs (ignored in git)
-- rag/out/ — chunk metadata + vectors (ignored in git)
+## Features
+- Extracts clean requirements from messy JDs
+- Matches each requirement to resume evidence
+- Uses explainable keyword gates (SQL, Azure, Security, etc.)
+- Prevents stale results with content-hash caching
+- Shows clear matched / missing gaps
 
-## How to Run
-1. Add documents:
+## How it works
+1. Ingest resume + JD
+2. Create embeddings
+3. Store vectors
+4. Compare requirements vs resume chunks
+5. Apply keyword gates
+6. Cache results safely
+
+## How to run
+python rag/ingest.py  
+uvicorn rag.api:app --reload  
+POST /compare
+
+## Why this matters
+This shows real GenAI engineering: reliability, explainability, and reproducibility.
